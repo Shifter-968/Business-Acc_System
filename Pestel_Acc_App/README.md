@@ -117,23 +117,6 @@ packages/shared/ ← shared TypeScript types
 - Swagger is enabled for API exploration.
 - Full end-to-end runtime depends on Docker PostgreSQL and local `.env` values.
 
-## If You Want to Push to GitHub
-
-This local copy does not currently include a Git repository metadata folder (`.git`).
-If you need to push this project to GitHub, run:
-
-```powershell
-git init
-
-git add .
-git commit -m "Initial Fannie Logistics accounting platform"
-git branch -M main
-git remote add origin https://github.com/Shifter-968/Business-Acc_System.git
-git push -u origin main
-```
-
-If you already have an existing remote repository, use that remote URL instead.
-
 ## Additional Documentation
 
 - `GETTING_STARTED.md` — Detailed setup steps for running the app
