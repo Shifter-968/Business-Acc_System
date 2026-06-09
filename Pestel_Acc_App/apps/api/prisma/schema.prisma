@@ -1,0 +1,399 @@
+// This is your Prisma schema file for the Fannie Logistics system.
+// Run: npx prisma migrate dev --name init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  ADMIN
+  ACCOUNTANT
+  VIEWER
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PARTIALLY_PAID
+  PAID
+  VOID
+  OVERDUE
+}
+
+enum QuoteStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  DECLINED
+  CONVERTED
+}
+
+enum PaymentMethod {
+  BANK_TRANSFER
+  CASH
+  CHEQUE
+  CREDIT_CARD
+  EFT
+}
+
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  INCOME
+  EXPENSE
+}
+
+enum JournalEntryType {
+  INVOICE
+  PAYMENT
+  EXPENSE
+  MANUAL
+  REVERSAL
+}
+
+// ─── Users ────────────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  firstName    String
+  lastName     String
+  role         UserRole @default(ACCOUNTANT)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Audit relations
+  invoicesCreated   Invoice[]      @relation("InvoiceCreatedBy")
+  quotesCreated     Quote[]        @relation("QuoteCreatedBy")
+  expensesCreated   Expense[]      @relation("ExpenseCreatedBy")
+  journalEntries    JournalEntry[] @relation("JournalCreatedBy")
+  refreshTokens     RefreshToken[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@map("refresh_tokens")
+}
+
+// ─── Company Settings ─────────────────────────────────────────────────────────
+
+model CompanySettings {
+  id             String   @id @default(cuid())
+  companyName    String
+  registrationNo String?
+  vatNumber      String?
+  address        String?
+  city           String?
+  postalCode     String?
+  country        String   @default("South Africa")
+  phone          String?
+  email          String?
+  website        String?
+  logoUrl        String?
+  bankName       String?
+  bankAccount    String?
+  bankBranch     String?
+  invoicePrefix  String   @default("INV")
+  quotePrefix    String   @default("QUO")
+  nextInvoiceNo  Int      @default(1)
+  nextQuoteNo    Int      @default(1)
+  vatRate        Decimal  @default(15) @db.Decimal(5, 2) // 15% South African VAT
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("company_settings")
+}
+
+// ─── Chart of Accounts ────────────────────────────────────────────────────────
+
+model Account {
+  id          String      @id @default(cuid())
+  code        String      @unique // e.g. "1000", "4000"
+  name        String
+  type        AccountType
+  description String?
+  isSystem    Boolean     @default(false) // system accounts cannot be deleted
+  isActive    Boolean     @default(true)
+  parentId    String?
+  parent      Account?    @relation("AccountHierarchy", fields: [parentId], references: [id])
+  children    Account[]   @relation("AccountHierarchy")
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  // Relations
+  debitLines  JournalLine[] @relation("DebitAccount")
+  creditLines JournalLine[] @relation("CreditAccount")
+
+  @@map("accounts")
+}
+
+// ─── Customers / Billing Accounts ─────────────────────────────────────────────
+
+model Client {
+  id             String    @id @default(cuid())
+  name           String
+  contactPerson  String?
+  email          String?
+  phone          String?
+  address        String?
+  city           String?
+  postalCode     String?
+  vatNumber      String?
+  registrationNo String?
+  notes          String?
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  invoices       Invoice[]
+  quotes         Quote[]
+
+  @@map("clients")
+}
+
+// ─── Suppliers ────────────────────────────────────────────────────────────────
+
+model Supplier {
+  id             String    @id @default(cuid())
+  name           String
+  contactPerson  String?
+  email          String?
+  phone          String?
+  address        String?
+  city           String?
+  postalCode     String?
+  vatNumber      String?
+  registrationNo String?
+  notes          String?
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  expenses       Expense[]
+
+  @@map("suppliers")
+}
+
+// ─── Invoices ─────────────────────────────────────────────────────────────────
+
+model Invoice {
+  id            String        @id @default(cuid())
+  invoiceNumber String        @unique
+  clientId      String
+  client        Client        @relation(fields: [clientId], references: [id])
+  status        InvoiceStatus @default(DRAFT)
+  issueDate     DateTime      @default(now())
+  dueDate       DateTime
+  notes         String?
+  terms         String?
+  subtotal      Decimal       @db.Decimal(15, 2)
+  vatAmount     Decimal       @db.Decimal(15, 2)
+  total         Decimal       @db.Decimal(15, 2)
+  amountPaid    Decimal       @default(0) @db.Decimal(15, 2)
+  amountDue     Decimal       @db.Decimal(15, 2)
+  sentAt        DateTime?
+  paidAt        DateTime?
+  voidedAt      DateTime?
+  createdById   String
+  createdBy     User          @relation("InvoiceCreatedBy", fields: [createdById], references: [id])
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  items         InvoiceItem[]
+  payments      Payment[]
+  journalEntry  JournalEntry?
+  vatRecords    VatTransaction[]
+
+  @@map("invoices")
+}
+
+model InvoiceItem {
+  id          String   @id @default(cuid())
+  invoiceId   String
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  description String
+  quantity    Decimal  @db.Decimal(10, 3)
+  unitPrice   Decimal  @db.Decimal(15, 2)
+  vatRate     Decimal  @db.Decimal(5, 2) // per-line VAT rate
+  vatAmount   Decimal  @db.Decimal(15, 2)
+  total       Decimal  @db.Decimal(15, 2)
+  sortOrder   Int      @default(0)
+
+  @@map("invoice_items")
+}
+
+// ─── Quotes ───────────────────────────────────────────────────────────────────
+
+model Quote {
+  id           String      @id @default(cuid())
+  quoteNumber  String      @unique
+  clientId     String
+  client       Client      @relation(fields: [clientId], references: [id])
+  status       QuoteStatus @default(DRAFT)
+  issueDate    DateTime    @default(now())
+  expiryDate   DateTime
+  notes        String?
+  terms        String?
+  subtotal     Decimal     @db.Decimal(15, 2)
+  vatAmount    Decimal     @db.Decimal(15, 2)
+  total        Decimal     @db.Decimal(15, 2)
+  sentAt       DateTime?
+  convertedAt  DateTime?
+  invoiceId    String?     @unique // set when converted to invoice
+  createdById  String
+  createdBy    User        @relation("QuoteCreatedBy", fields: [createdById], references: [id])
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  items        QuoteItem[]
+
+  @@map("quotes")
+}
+
+model QuoteItem {
+  id          String  @id @default(cuid())
+  quoteId     String
+  quote       Quote   @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  description String
+  quantity    Decimal @db.Decimal(10, 3)
+  unitPrice   Decimal @db.Decimal(15, 2)
+  vatRate     Decimal @db.Decimal(5, 2)
+  vatAmount   Decimal @db.Decimal(15, 2)
+  total       Decimal @db.Decimal(15, 2)
+  sortOrder   Int     @default(0)
+
+  @@map("quote_items")
+}
+
+// ─── Expenses ─────────────────────────────────────────────────────────────────
+
+model Expense {
+  id          String    @id @default(cuid())
+  supplierId  String?
+  supplier    Supplier? @relation(fields: [supplierId], references: [id])
+  description String
+  category    String    // e.g. "Equipment", "Transport", "Office"
+  date        DateTime
+  subtotal    Decimal   @db.Decimal(15, 2)
+  vatAmount   Decimal   @default(0) @db.Decimal(15, 2)
+  total       Decimal   @db.Decimal(15, 2)
+  reference   String?   // supplier invoice/receipt number
+  receiptUrl  String?   // uploaded receipt file
+  notes       String?
+  createdById String
+  createdBy   User      @relation("ExpenseCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  journalEntry  JournalEntry?
+  vatRecords    VatTransaction[]
+
+  @@map("expenses")
+}
+
+// ─── Payments ─────────────────────────────────────────────────────────────────
+
+model Payment {
+  id            String        @id @default(cuid())
+  invoiceId     String
+  invoice       Invoice       @relation(fields: [invoiceId], references: [id])
+  amount        Decimal       @db.Decimal(15, 2)
+  paymentDate   DateTime
+  method        PaymentMethod
+  reference     String?       // bank reference, cheque number, etc.
+  notes         String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  journalEntry  JournalEntry?
+
+  @@map("payments")
+}
+
+// ─── Journal (Double-Entry Bookkeeping) ───────────────────────────────────────
+
+model JournalEntry {
+  id          String           @id @default(cuid())
+  type        JournalEntryType
+  reference   String           // human-readable ref e.g. "INV-0001"
+  description String
+  date        DateTime
+  isReversed  Boolean          @default(false)
+  reversalId  String?          @unique // points to the reversal entry
+  invoiceId   String?          @unique
+  invoice     Invoice?         @relation(fields: [invoiceId], references: [id])
+  expenseId   String?          @unique
+  expense     Expense?         @relation(fields: [expenseId], references: [id])
+  paymentId   String?          @unique
+  payment     Payment?         @relation(fields: [paymentId], references: [id])
+  createdById String
+  createdBy   User             @relation("JournalCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime         @default(now())
+
+  lines       JournalLine[]
+
+  @@map("journal_entries")
+}
+
+model JournalLine {
+  id             String       @id @default(cuid())
+  journalEntryId String
+  journalEntry   JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  debitAccountId String?
+  debitAccount   Account?     @relation("DebitAccount", fields: [debitAccountId], references: [id])
+  creditAccountId String?
+  creditAccount  Account?     @relation("CreditAccount", fields: [creditAccountId], references: [id])
+  amount         Decimal      @db.Decimal(15, 2)
+  description    String?
+
+  @@map("journal_lines")
+}
+
+// ─── VAT Transactions ─────────────────────────────────────────────────────────
+
+model VatTransaction {
+  id          String   @id @default(cuid())
+  invoiceId   String?
+  invoice     Invoice? @relation(fields: [invoiceId], references: [id])
+  expenseId   String?
+  expense     Expense? @relation(fields: [expenseId], references: [id])
+  date        DateTime
+  isOutput    Boolean  // true = VAT collected (from invoice), false = VAT paid (from expense)
+  vatAmount   Decimal  @db.Decimal(15, 2)
+  netAmount   Decimal  @db.Decimal(15, 2)
+  vatRate     Decimal  @db.Decimal(5, 2)
+  createdAt   DateTime @default(now())
+
+  @@map("vat_transactions")
+}
+
+// ─── Period Lock ──────────────────────────────────────────────────────────────
+
+model PeriodLock {
+  id        String   @id @default(cuid())
+  year      Int
+  month     Int      // 1–12
+  lockedAt  DateTime @default(now())
+  lockedBy  String   // userId
+
+  @@unique([year, month])
+  @@map("period_locks")
+}
